@@ -4,12 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Painel de Rastreamento</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, sans-serif; background: #f4f4f5; color: #111; min-height: 100vh; }
   header { background: #1D9E75; color: white; padding: 1rem 1.5rem; display: flex; align-items: center; gap: 12px; }
   header h1 { font-size: 18px; font-weight: 500; }
-  .container { max-width: 800px; margin: 1.5rem auto; padding: 0 1rem; }
+  .container { max-width: 900px; margin: 1.5rem auto; padding: 0 1rem; }
   .card { background: white; border-radius: 12px; border: 1px solid #e4e4e7; padding: 1.25rem; margin-bottom: 1rem; }
   .row { display: flex; align-items: center; gap: 10px; margin-bottom: 1rem; }
   input { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #d4d4d8; font-size: 15px; outline: none; }
@@ -21,7 +22,7 @@
   .badge-on { background: #dcfce7; color: #166534; }
   .badge-off { background: #f4f4f5; color: #666; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-  .map-box { background: #f4f4f5; border-radius: 8px; height: 320px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #888; font-size: 14px; border: 1px solid #e4e4e7; }
+  #map { height: 420px; border-radius: 10px; border: 1px solid #e4e4e7; z-index: 0; }
   .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 1rem; }
   .stat { background: #f9f9f9; border-radius: 8px; padding: 0.75rem 1rem; }
   .stat-label { font-size: 12px; color: #888; margin-bottom: 4px; }
@@ -31,8 +32,7 @@
   .section-title { font-size: 12px; font-weight: 500; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; }
   .pulse { animation: pulse 1.5s infinite; }
   @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
-  .map-link { display: flex; flex-direction: column; align-items: center; gap: 10px; text-decoration: none; color: inherit; }
-  .pin { font-size: 48px; }
+  .waiting { height: 420px; border-radius: 10px; border: 1px solid #e4e4e7; background: #f9f9f9; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #888; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -49,10 +49,12 @@
       <button class="btn btn-green" onclick="rastrear()">Rastrear</button>
       <button class="btn btn-red" onclick="parar()" id="btn-parar" style="display:none;">Parar</button>
     </div>
-    <div class="map-box" id="mapa">
+    <div id="map-waiting" class="waiting">
       <svg width="40" height="40" fill="none" stroke="#aaa" stroke-width="1.5" viewBox="0 0 24 24"><path d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6-3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 9m0 8V9m0 0L9 7"/></svg>
       <p>Digite um código e clique em Rastrear</p>
+      <p style="font-size:12px;">O mapa aparecerá aqui em tempo real</p>
     </div>
+    <div id="map" style="display:none;"></div>
   </div>
 
   <div class="stat-grid">
@@ -67,6 +69,7 @@
   </div>
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.0/firebase-app-compat.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.0/firebase-database-compat.min.js"></script>
 <script>
@@ -81,40 +84,64 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
-let listener = null;
+
+let map = null, marker = null, listener = null, trail = [];
+
+function iniciarMapa(lat, lng) {
+  document.getElementById('map-waiting').style.display = 'none';
+  document.getElementById('map').style.display = 'block';
+
+  if (!map) {
+    map = L.map('map').setView([lat, lng], 16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    const icon = L.divIcon({
+      className: '',
+      html: `<div style="background:#1D9E75;width:20px;height:20px;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.4);"></div>`,
+      iconSize: [20, 20],
+      iconAnchor: [10, 10]
+    });
+    marker = L.marker([lat, lng], { icon }).addTo(map);
+    marker.bindPopup('<b>Entregador</b>').openPopup();
+  } else {
+    marker.setLatLng([lat, lng]);
+    map.setView([lat, lng], map.getZoom());
+  }
+
+  trail.push([lat, lng]);
+  if (trail.length > 1) {
+    if (window.trailLine) map.removeLayer(window.trailLine);
+    window.trailLine = L.polyline(trail, { color: '#1D9E75', weight: 3, opacity: 0.6, dashArray: '6,8' }).addTo(map);
+  }
+}
 
 function rastrear() {
   const cod = document.getElementById('cod').value.trim();
   if (!cod) { alert('Digite o código da entrega'); return; }
   if (listener) listener.off();
+  trail = [];
 
   document.getElementById('badge').className = 'badge badge-on';
   document.getElementById('badge-text').textContent = 'Monitorando...';
   document.getElementById('btn-parar').style.display = 'inline-block';
-  document.getElementById('mapa').innerHTML = '<div class="pulse" style="font-size:14px;color:#888;">Aguardando posição do entregador...</div>';
 
   listener = db.ref('entregas/' + cod + '/localizacao');
   listener.on('value', snap => {
     const d = snap.val();
     if (!d) return;
     const hora = new Date(d.timestamp).toLocaleTimeString('pt-BR');
+
     document.getElementById('lat').textContent = d.lat.toFixed(6);
     document.getElementById('lng').textContent = d.lng.toFixed(6);
     document.getElementById('hora').textContent = hora;
     document.getElementById('badge-text').textContent = 'Online';
 
-    document.getElementById('mapa').innerHTML = `
-      <a class="map-link" href="https://www.google.com/maps?q=${d.lat},${d.lng}" target="_blank">
-        <span class="pin">📍</span>
-        <strong>Entregador localizado</strong>
-        <span style="font-size:13px;color:#1D9E75;">${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}</span>
-        <span style="font-size:12px;color:#888;">Clique para abrir no Google Maps</span>
-        <span style="font-size:11px;color:#aaa;">Atualizado às ${hora}</span>
-      </a>
-    `;
+    iniciarMapa(d.lat, d.lng);
 
     const log = document.getElementById('log');
-    if (log.children[0].style.color === 'rgb(170, 170, 170)') log.innerHTML = '';
+    if (log.firstChild && log.firstChild.style && log.firstChild.style.color === 'rgb(170, 170, 170)') log.innerHTML = '';
     const item = document.createElement('div');
     item.className = 'log-item';
     item.textContent = `${hora} — Lat: ${d.lat.toFixed(5)}, Lng: ${d.lng.toFixed(5)}`;
@@ -128,7 +155,6 @@ function parar() {
   document.getElementById('badge').className = 'badge badge-off';
   document.getElementById('badge-text').textContent = 'Parado';
   document.getElementById('btn-parar').style.display = 'none';
-  document.getElementById('mapa').innerHTML = '<p style="color:#888;font-size:14px;">Rastreamento encerrado.</p>';
 }
 </script>
 </body>
